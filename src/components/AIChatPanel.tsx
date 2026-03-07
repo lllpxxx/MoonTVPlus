@@ -211,13 +211,22 @@ export default function AIChatPanel({
         }
 
         let assistantMessage = '';
+        let buffer = ''; // 缓冲区，用于保存不完整的行
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter((line) => line.trim() !== '');
+          // 将新chunk与缓冲区拼接
+          const text = buffer + chunk;
+          // 按换行符分割，最后一个元素可能是不完整的行
+          const parts = text.split('\n');
+          // 保存最后一个不完整的行到缓冲区
+          buffer = parts.pop() || '';
+
+          // 处理完整的行
+          const lines = parts.filter((line) => line.trim() !== '');
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
@@ -246,6 +255,33 @@ export default function AIChatPanel({
                 }
               } catch (e) {
                 console.error('解析SSE数据失败:', e);
+              }
+            }
+          }
+        }
+
+        // 处理缓冲区中剩余的数据
+        if (buffer.trim()) {
+          const line = buffer.trim();
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data && data !== '[DONE]') {
+              try {
+                const json = JSON.parse(data);
+                const text = json.text || '';
+                if (text) {
+                  assistantMessage += text;
+                  setMessages((prev) => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1] = {
+                      role: 'assistant',
+                      content: assistantMessage,
+                    };
+                    return newMessages;
+                  });
+                }
+              } catch (e) {
+                console.error('解析最终缓冲区数据失败:', e);
               }
             }
           }

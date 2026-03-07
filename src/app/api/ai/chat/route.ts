@@ -73,13 +73,22 @@ function transformToSSE(
 
   return new ReadableStream({
     async start(controller) {
+      let buffer = ''; // 缓冲区，用于保存不完整的行
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter((line) => line.trim() !== '');
+          // 将新chunk与缓冲区拼接
+          const text = buffer + chunk;
+          // 按换行符分割，最后一个元素可能是不完整的行
+          const parts = text.split('\n');
+          // 保存最后一个不完整的行到缓冲区
+          buffer = parts.pop() || '';
+
+          // 处理完整的行
+          const lines = parts.filter((line) => line.trim() !== '');
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
@@ -122,6 +131,34 @@ function transformToSSE(
                 if (data.length > 0) {
                   console.error('Parse stream chunk error:', e, 'Data:', data.substring(0, 100));
                 }
+              }
+            }
+          }
+        }
+
+        // 处理缓冲区中剩余的数据
+        if (buffer.trim()) {
+          const line = buffer.trim();
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data && data !== '[DONE]') {
+              try {
+                const json = JSON.parse(data);
+                let text = '';
+                if (provider === 'claude') {
+                  if (json.type === 'content_block_delta') {
+                    text = json.delta?.text || '';
+                  }
+                } else {
+                  text = json.choices?.[0]?.delta?.content || '';
+                }
+                if (text) {
+                  controller.enqueue(
+                    new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n\n`)
+                  );
+                }
+              } catch (e) {
+                console.error('Parse final buffer error:', e);
               }
             }
           }
